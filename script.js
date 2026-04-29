@@ -7,6 +7,7 @@ window.scrollTo(0, 0);
 window.onbeforeunload = function () {
     window.scrollTo(0, 0);
 }
+
 // ─── DATA ────────────────────────────────────────────────────────────────────
 const PRODUCTS = [
   // ─── ELECTRONICS ─────────────────────────
@@ -99,10 +100,7 @@ function filterCat(cat, chipEl) {
 
 function handleSearch(val) {
   currentSearch = val.toLowerCase();
-  
   currentFilter = 'All';
-  
-  // 3. UI එකේ chips වල active class එක මාරු කරනවා
   document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
   document.querySelector('.filter-chip').classList.add('active');
   renderProducts();
@@ -110,13 +108,12 @@ function handleSearch(val) {
     scrollToProducts();
   }
 }
-// Array එකක් shuffle කිරීමට භාවිතා කරන function එක
-function shuffleArray(array) {
-  return array.sort(() => Math.random() - 0.5);
-}
-function renderProducts() {
-  let list = [...PRODUCTS].sort(() => Math.random() - 0.5);
 
+// Shuffle function එක දැන් අවශ්‍ය නැති නිසා ඉවත් කළා
+
+function renderProducts() {
+  // Shuffle කරන කොටස ඉවත් කර මුල් Array එක භාවිතා කරනවා
+  let list = [...PRODUCTS]; 
 
   if (currentFilter !== 'All') {
     list = list.filter(p => p.cat === currentFilter);
@@ -132,7 +129,6 @@ function renderProducts() {
   const title = currentFilter === 'All' ? 'All Products' : currentFilter;
   const countSpan = `<span>${list.length} item${list.length !== 1 ? 's' : ''}</span>`;
   document.getElementById('sectionTitle').innerHTML = `${title} ${countSpan}`;
-
 
   const grid = document.getElementById('productsGrid');
   grid.innerHTML = list.map(p => {
@@ -285,7 +281,7 @@ function renderCheckoutSummary() {
     <h3>Order Summary</h3>
     ${cart.map(item => {
       const p = PRODUCTS.find(pr=>pr.id===item.id);
-      return `<div class="summary-row"><span>${p.emoji} ${p.name} ×${item.qty}</span><span>£${(p.price*item.qty).toFixed(2)}</span></div>`;
+      return `<div class="summary-row"><span>${p.name} ×${item.qty}</span><span>£${(p.price*item.qty).toFixed(2)}</span></div>`;
     }).join('')}
     <div class="summary-row"><span>Shipping</span><span>${shipping===0?'FREE':'£'+shipping.toFixed(2)}</span></div>
     <div class="summary-row total"><span>Total</span><span class="val">£${total.toFixed(2)}</span></div>
@@ -372,7 +368,7 @@ function buildReview() {
       <div style="font-size:0.75rem;color:var(--muted);font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:12px;">🛒 Items</div>
       ${cart.map(item=>{
         const p=PRODUCTS.find(pr=>pr.id===item.id);
-        return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:0.88rem;"><span>${p.emoji} ${p.name} ×${item.qty}</span><span style="color:var(--accent);font-weight:600;">£${(p.price*item.qty).toFixed(2)}</span></div>`;
+        return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:0.88rem;"><span>${p.name} ×${item.qty}</span><span style="color:var(--accent);font-weight:600;">£${(p.price*item.qty).toFixed(2)}</span></div>`;
       }).join('')}
       <div style="display:flex;justify-content:space-between;margin-top:12px;font-size:1.1rem;font-weight:700;"><span>Total</span><span style="color:var(--accent);font-family:var(--font-display);">£${total.toFixed(2)}</span></div>
     </div>
@@ -386,25 +382,22 @@ function placeOrder() {
   const shipping = subtotal >= 50 ? 0 : 4.99;
   const total = subtotal + shipping;
 
-  // Save order to localStorage
   const orders = JSON.parse(localStorage.getItem('nova_orders')||'[]');
   orders.push({ id: orderId, date: new Date().toISOString(), items: [...cart], total });
   localStorage.setItem('nova_orders', JSON.stringify(orders));
 
-  // Update stock
   cart.forEach(item => {
     const p = PRODUCTS.find(pr=>pr.id===item.id);
     if(p) p.stock = Math.max(0, p.stock - item.qty);
   });
 
-  // Show confirmation
   document.getElementById('orderRef').textContent = orderId;
   document.getElementById('confirmEmail').textContent = email;
   document.getElementById('confirmItems').innerHTML = `
     <h4>Items Ordered</h4>
     ${cart.map(item=>{
       const p=PRODUCTS.find(pr=>pr.id===item.id);
-      return `<div class="confirm-item-row"><span>${p.emoji} ${p.name} ×${item.qty}</span><span class="price">£${(p.price*item.qty).toFixed(2)}</span></div>`;
+      return `<div class="confirm-item-row"><span>${p.name} ×${item.qty}</span><span class="price">£${(p.price*item.qty).toFixed(2)}</span></div>`;
     }).join('')}
     <div class="confirm-item-row" style="padding-top:12px;"><span><strong>Order Total</strong></span><span class="price"><strong>£${total.toFixed(2)}</strong></span></div>
   `;
@@ -420,7 +413,6 @@ function goHome() {
   renderProducts();
 }
 
-// ─── CARD FORMATTING ─────────────────────────────────────────────────────────
 function formatCardNum(el) {
   let v = el.value.replace(/\D/g,'').substring(0,16);
   el.value = v.match(/.{1,4}/g)?.join(' ')||v;
@@ -435,21 +427,17 @@ function formatExpiry(el) {
 }
 function scrollToProducts() {
     const element = document.getElementById("products-section");
-    
     if (element) {
-        // Header එකේ උස (height) ගන්නවා
         const headerHeight = document.querySelector("header").offsetHeight;
-        
-        // Section එක තියෙන තැන බලලා, Header එකේ උස අඩු කරනවා
         const elementPosition = element.getBoundingClientRect().top;
         const offsetPosition = elementPosition + window.pageYOffset - headerHeight - 20;
-
         window.scrollTo({
             top: offsetPosition,
-            behavior: "smooth" // Smooth scroll එකක් දෙන්න
+            behavior: "smooth"
         });
     }
 }
+
 // ─── INIT ────────────────────────────────────────────────────────────────────
 updateCartCount();
 renderProducts();
