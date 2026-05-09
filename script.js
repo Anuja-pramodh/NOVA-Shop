@@ -8,6 +8,30 @@ window.onbeforeunload = function () {
     window.scrollTo(0, 0);
 }
 
+// ─── FIREBASE HELPERS (bridge from index.html inline module) ─────────────────
+// Firebase SDK and config loaded via <script type="module"> in index.html
+// Those functions are exposed on window._fb.*
+async function fbSaveCart(userId, cartData) {
+  try {
+    if (!window._fb) return;
+    await window._fb.saveCart(userId, cartData);
+  } catch(e) { console.warn('FB cart save failed', e); }
+}
+
+async function fbLoadCart(userId) {
+  try {
+    if (!window._fb) return null;
+    return await window._fb.loadCart(userId);
+  } catch(e) { return null; }
+}
+
+async function fbSaveOrder(userId, order) {
+  try {
+    if (!window._fb) return;
+    await window._fb.saveOrder(userId, order);
+  } catch(e) { console.warn('FB order save failed', e); }
+}
+
 // ─── DATA ────────────────────────────────────────────────────────────────────
 const PRODUCTS = [
   // ─── ELECTRONICS ─────────────────────────
@@ -53,14 +77,102 @@ let currentFilter = 'All';
 let currentSearch = '';
 let modalProductId = null;
 
-function saveCart() { localStorage.setItem('nova_cart', JSON.stringify(cart)); }
+function saveCart() {
+  localStorage.setItem('nova_cart', JSON.stringify(cart));
+  // Firebase sync (fire-and-forget)
+  const session = getSession();
+  if (session) fbSaveCart(session.id, cart);
+}
+
+async function loadCartFromFirebase() {
+  const session = getSession();
+  if (!session) return;
+  const fbCart = await fbLoadCart(session.id);
+  if (fbCart && Array.isArray(fbCart) && fbCart.length > 0) {
+    cart = fbCart;
+    localStorage.setItem('nova_cart', JSON.stringify(cart));
+    updateCartCount();
+    renderProducts();
+  }
+}
 
 function getCartQty() { return cart.reduce((s,i)=>s+i.qty,0); }
+function getCartTotal() {
+  return cart.reduce((s,i)=>{
+    const p = PRODUCTS.find(pr=>pr.id===i.id);
+    return s + (p ? p.price * i.qty : 0);
+  }, 0);
+}
 
-function getCartTotal() { return cart.reduce((s,i)=>{
-  const p = PRODUCTS.find(pr=>pr.id===i.id);
-  return s + (p ? p.price * i.qty : 0);
-}, 0); }
+// ─── SESSION ─────────────────────────────────────────────────────────────────
+function getSession() {
+  const ls = localStorage.getItem('nova_session');
+  const ss = sessionStorage.getItem('nova_session');
+  return ls ? JSON.parse(ls) : (ss ? JSON.parse(ss) : null);
+}
+
+function clearSession() {
+  localStorage.removeItem('nova_session');
+  sessionStorage.removeItem('nova_session');
+}
+
+// ─── USER HEADER ─────────────────────────────────────────────────────────────
+function initUserHeader() {
+  const session = getSession();
+  const container = document.getElementById('userHeaderArea');
+  if (!container) return;
+
+  if (session) {
+    const initials = (session.firstName[0] + session.lastName[0]).toUpperCase();
+    container.innerHTML = `
+      <div class="user-menu-wrap">
+        <button class="user-pill" onclick="toggleUserMenu()">
+          <div class="user-pill-avatar">${initials}</div>
+          <span class="user-pill-name">Hi, ${session.firstName}</span>
+          <span class="user-pill-caret">▾</span>
+        </button>
+        <div class="user-dropdown" id="userDropdown">
+          <div class="user-dropdown-info">
+            <div class="user-drop-avatar">${initials}</div>
+            <div>
+              <div class="user-drop-name">${session.firstName} ${session.lastName}</div>
+              <div class="user-drop-email">${session.email}</div>
+            </div>
+          </div>
+          <div class="user-dropdown-divider"></div>
+          <button class="user-drop-item" onclick="showPage('cart'); closeUserMenu()">🛒 My Orders</button>
+          <button class="user-drop-item danger" onclick="handleLogout()">↩ Sign Out</button>
+        </div>
+      </div>
+    `;
+  } else {
+    container.innerHTML = `
+      <a class="header-signin-btn" href="auth.html">Sign In</a>
+    `;
+  }
+}
+
+function toggleUserMenu() {
+  const dd = document.getElementById('userDropdown');
+  if (dd) dd.classList.toggle('open');
+}
+
+function closeUserMenu() {
+  const dd = document.getElementById('userDropdown');
+  if (dd) dd.classList.remove('open');
+}
+
+function handleLogout() {
+  clearSession();
+  closeUserMenu();
+  initUserHeader();
+  toast('Signed out successfully');
+}
+
+// Close dropdown when clicking outside
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.user-menu-wrap')) closeUserMenu();
+});
 
 // ─── UI HELPERS ──────────────────────────────────────────────────────────────
 function showPage(page) {
@@ -104,27 +216,16 @@ function handleSearch(val) {
   document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
   document.querySelector('.filter-chip').classList.add('active');
   renderProducts();
-  if (val.trim().length > 0) {
-    scrollToProducts();
-  }
+  if (val.trim().length > 0) scrollToProducts();
 }
 
-// Shuffle function එක දැන් අවශ්‍ය නැති නිසා ඉවත් කළා
-
 function renderProducts() {
-  // Shuffle කරන කොටස ඉවත් කර මුල් Array එක භාවිතා කරනවා
-  let list = [...PRODUCTS]; 
-
-  if (currentFilter !== 'All') {
-    list = list.filter(p => p.cat === currentFilter);
-  }
-
-  if (currentSearch) {
-    list = list.filter(p => 
-      p.name.toLowerCase().includes(currentSearch) || 
-      p.cat.toLowerCase().includes(currentSearch)
-    );
-  }
+  let list = [...PRODUCTS];
+  if (currentFilter !== 'All') list = list.filter(p => p.cat === currentFilter);
+  if (currentSearch) list = list.filter(p =>
+    p.name.toLowerCase().includes(currentSearch) ||
+    p.cat.toLowerCase().includes(currentSearch)
+  );
 
   const title = currentFilter === 'All' ? 'All Products' : currentFilter;
   const countSpan = `<span>${list.length} item${list.length !== 1 ? 's' : ''}</span>`;
@@ -134,7 +235,6 @@ function renderProducts() {
   grid.innerHTML = list.map(p => {
     const inCart = cart.find(c => c.id === p.id);
     const oos = p.stock === 0;
-
     return `
     <div class="product-card" onclick="openModal(${p.id})">
       <div class="product-img" style="background-image: url('${p.img}');">
@@ -160,8 +260,7 @@ function renderProducts() {
 function openModal(id) {
   const p = PRODUCTS.find(pr=>pr.id===id);
   modalProductId = id;
-  const modalImg = document.getElementById('modalImg');
-  modalImg.style.backgroundImage = `url('${p.img}')`;
+  document.getElementById('modalImg').style.backgroundImage = `url('${p.img}')`;
   document.getElementById('modalCat').textContent = p.cat;
   document.getElementById('modalName').textContent = p.name;
   document.getElementById('modalDesc').textContent = p.desc;
@@ -296,6 +395,17 @@ function resetCheckoutSteps() {
     const el = document.getElementById(id);
     el.className = 'step-indicator' + (i===0?' active':'');
   });
+
+  // Auto-fill delivery form from session
+  const session = getSession();
+  if (session) {
+    const fn = document.getElementById('firstName');
+    const em = document.getElementById('email');
+    if (fn && !fn.value) fn.value = session.firstName;
+    const ln = document.getElementById('lastName');
+    if (ln && !ln.value) ln.value = session.lastName;
+    if (em && !em.value) em.value = session.email;
+  }
 }
 
 function nextStep(step) {
@@ -382,9 +492,21 @@ function placeOrder() {
   const shipping = subtotal >= 50 ? 0 : 4.99;
   const total = subtotal + shipping;
 
+  // items එකේ product name, price ත් save කරනවා
+  const richItems = cart.map(item => {
+    const p = PRODUCTS.find(pr => pr.id === item.id);
+    return { id: item.id, qty: item.qty, name: p ? p.name : 'Unknown', price: p ? p.price : 0, category: p ? p.cat : '' };
+  });
+  const order = { id: orderId, date: new Date().toISOString(), items: richItems, total };
+
+  // LocalStorage fallback
   const orders = JSON.parse(localStorage.getItem('nova_orders')||'[]');
-  orders.push({ id: orderId, date: new Date().toISOString(), items: [...cart], total });
+  orders.push(order);
   localStorage.setItem('nova_orders', JSON.stringify(orders));
+
+  // Firebase save
+  const session = getSession();
+  if (session) fbSaveOrder(session.id, order);
 
   cart.forEach(item => {
     const p = PRODUCTS.find(pr=>pr.id===item.id);
@@ -426,18 +548,19 @@ function formatExpiry(el) {
   document.getElementById('displayExpiry').textContent = v||'MM/YY';
 }
 function scrollToProducts() {
-    const element = document.getElementById("products-section");
-    if (element) {
-        const headerHeight = document.querySelector("header").offsetHeight;
-        const elementPosition = element.getBoundingClientRect().top;
-        const offsetPosition = elementPosition + window.pageYOffset - headerHeight - 20;
-        window.scrollTo({
-            top: offsetPosition,
-            behavior: "smooth"
-        });
-    }
+  const element = document.getElementById("products-section");
+  if (element) {
+    const headerHeight = document.querySelector("header").offsetHeight;
+    const elementPosition = element.getBoundingClientRect().top;
+    const offsetPosition = elementPosition + window.pageYOffset - headerHeight - 20;
+    window.scrollTo({ top: offsetPosition, behavior: "smooth" });
+  }
 }
 
 // ─── INIT ────────────────────────────────────────────────────────────────────
 updateCartCount();
 renderProducts();
+initUserHeader();
+
+// Firebase cart sync — small delay to let Firebase module load first
+setTimeout(loadCartFromFirebase, 800);
