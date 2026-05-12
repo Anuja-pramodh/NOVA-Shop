@@ -8,9 +8,6 @@ window.onbeforeunload = function () {
     window.scrollTo(0, 0);
 }
 
-// ─── FIREBASE HELPERS (bridge from index.html inline module) ─────────────────
-// Firebase SDK and config loaded via <script type="module"> in index.html
-// Those functions are exposed on window._fb.*
 async function fbSaveCart(userId, cartData) {
   try {
     if (!window._fb) return;
@@ -140,7 +137,7 @@ function initUserHeader() {
             </div>
           </div>
           <div class="user-dropdown-divider"></div>
-          <button class="user-drop-item" onclick="showPage('cart'); closeUserMenu()">🛒 My Orders</button>
+          <button class="user-drop-item" onclick="showPage('orders'); closeUserMenu()">📦 My Orders</button>
           <button class="user-drop-item danger" onclick="handleLogout()">↩ Sign Out</button>
         </div>
       </div>
@@ -179,6 +176,7 @@ function showPage(page) {
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.getElementById('page-'+page).classList.add('active');
   if(page==='cart') renderCart();
+  if(page==='orders') renderOrders();
   if(page==='checkout') { renderCheckoutSummary(); resetCheckoutSteps(); }
   window.scrollTo(0,0);
 }
@@ -364,11 +362,61 @@ function renderCart() {
         <div class="summary-row"><span>Shipping</span><span>${shipping===0?'<span style="color:var(--success)">FREE</span>':'£'+shipping.toFixed(2)}</span></div>
         ${shipping>0?'<div style="font-size:0.78rem;color:var(--muted);padding:4px 0;">Spend £50+ for free shipping</div>':''}
         <div class="summary-row total"><span>Total</span><span class="val">£${total.toFixed(2)}</span></div>
-        <button class="checkout-btn" onclick="showPage('checkout')">Proceed to Checkout →</button>
+        <button class="checkout-btn" onclick="goToCheckout()">Proceed to Checkout →</button>
         <button class="checkout-btn" style="background:var(--surface2);color:var(--text);margin-top:10px;" onclick="showPage('home')">← Continue Shopping</button>
       </div>
     </div>
   </div>`;
+}
+
+// ─── LOGIN-GATED CHECKOUT ─────────────────────────────────────────────────────
+function goToCheckout() {
+  const session = getSession();
+  if (!session) {
+    sessionStorage.setItem('nova_redirect_after_login', 'checkout');
+    showLoginPromptModal();
+    return;
+  }
+  showPage('checkout');
+}
+
+function showLoginPromptModal() {
+  const existing = document.getElementById('loginPromptModal');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'loginPromptModal';
+  overlay.style.cssText = `
+    position:fixed; inset:0; background:rgba(0,0,0,0.75); z-index:9999;
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  `;
+  overlay.innerHTML = `
+    <div style="
+      background:var(--surface); border:1px solid var(--border); border-radius:20px;
+      padding:36px; max-width:400px; width:100%; text-align:center;
+      box-shadow:0 24px 64px rgba(0,0,0,0.6);
+    ">
+      <div style="font-size:2.5rem; margin-bottom:16px;">🔐</div>
+      <h3 style="font-family:var(--font-display); font-size:1.5rem; margin-bottom:10px;">Sign In to Checkout</h3>
+      <p style="color:var(--muted); font-size:0.9rem; line-height:1.6; margin-bottom:28px;">
+        Please log in to your account and complete your purchase. If you don't have an account yet, you can create account in just a few steps!
+      </p>
+      <div style="display:flex; flex-direction:column; gap:12px;">
+        <a href="auth.html" style="
+          display:block; background:var(--accent); color:#0d0d0d;
+          font-family:var(--font-body); font-weight:700; font-size:0.95rem;
+          padding:14px 24px; border-radius:10px; text-decoration:none; letter-spacing:0.3px;
+        ">Sign In / Create Account →</a>
+        <button onclick="document.getElementById('loginPromptModal').remove()" style="
+          background:none; border:1px solid var(--border); color:var(--muted);
+          font-family:var(--font-body); font-size:0.88rem; padding:12px 24px;
+          border-radius:10px; cursor:pointer;
+        ">Cancel, keep shopping</button>
+      </div>
+    </div>
+  `;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
 }
 
 // ─── CHECKOUT ────────────────────────────────────────────────────────────────
@@ -555,6 +603,140 @@ function scrollToProducts() {
     const offsetPosition = elementPosition + window.pageYOffset - headerHeight - 20;
     window.scrollTo({ top: offsetPosition, behavior: "smooth" });
   }
+}
+
+async function fbLoadOrders(userId) {
+  try {
+    if (!window._fb) return null;
+    return await window._fb.loadOrders(userId);
+  } catch(e) { console.warn('FB orders load failed', e); return null; }
+}
+
+// ─── ORDERS PAGE ─────────────────────────────────────────────────────────────
+async function renderOrders() {
+  const el = document.getElementById('ordersContent');
+  const session = getSession();
+
+  if (!session) {
+    el.innerHTML = `
+      <div style="text-align:center;padding:60px 20px;color:var(--muted);">
+        <div style="font-size:2.5rem;margin-bottom:16px;">🔐</div>
+        <p style="margin-bottom:20px;">Please sign in to view your orders.</p>
+        <a href="auth.html" style="display:inline-block;background:var(--accent);color:#0d0d0d;font-weight:700;padding:12px 28px;border-radius:10px;text-decoration:none;font-family:var(--font-body);">Sign In →</a>
+      </div>`;
+    return;
+  }
+
+  // Loading state
+  el.innerHTML = `
+    <div style="text-align:center;padding:60px 20px;color:var(--muted);">
+      <div style="font-size:2rem;margin-bottom:16px;animation:spin 1s linear infinite;display:inline-block;">⟳</div>
+      <p>Loading your orders...</p>
+    </div>`;
+
+  // Try Firebase first, fallback to localStorage
+  let orders = await fbLoadOrders(session.id);
+  if (!orders || orders.length === 0) {
+    const local = JSON.parse(localStorage.getItem('nova_orders') || '[]');
+    if (local.length > 0) {
+      orders = [...local].sort((a, b) => new Date(b.date) - new Date(a.date));
+    }
+  }
+
+  if (!orders || orders.length === 0) {
+    el.innerHTML = `
+      <div style="text-align:center;padding:60px 20px;color:var(--muted);">
+        <div style="font-size:2.5rem;margin-bottom:16px;">📭</div>
+        <p style="margin-bottom:20px;">You haven't placed any orders yet.</p>
+        <button onclick="showPage('home')" style="background:var(--accent);color:#0d0d0d;font-weight:700;padding:12px 28px;border-radius:10px;border:none;cursor:pointer;font-family:var(--font-body);font-size:0.95rem;">Start Shopping →</button>
+      </div>`;
+    return;
+  }
+
+  el.innerHTML = orders.map(order => {
+    const date = new Date(order.date);
+    const dateStr = date.toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' });
+    const timeStr = date.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit' });
+    const items = order.items || [];
+    const total = typeof order.total === 'number' ? order.total.toFixed(2) : '—';
+
+    return `
+    <div style="
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:16px;
+      overflow:hidden;
+      margin-bottom:20px;
+      transition:border-color 0.2s;
+    " onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+
+      <!-- Order Header -->
+      <div style="
+        display:flex; justify-content:space-between; align-items:center;
+        flex-wrap:wrap; gap:12px;
+        padding:18px 20px;
+        background:var(--surface2);
+        border-bottom:1px solid var(--border);
+      ">
+        <div>
+          <div style="font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Order ID</div>
+          <div style="font-family:var(--font-display);font-weight:700;font-size:1rem;color:var(--accent);">${order.id}</div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Placed on</div>
+          <div style="font-size:0.88rem;font-weight:500;">${dateStr} <span style="color:var(--muted);">at ${timeStr}</span></div>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Total</div>
+          <div style="font-family:var(--font-display);font-size:1.15rem;font-weight:700;color:var(--accent);">£${total}</div>
+        </div>
+        <div>
+          <span style="
+            background:rgba(82,196,122,0.12);
+            color:#52c47a;
+            border:1px solid rgba(82,196,122,0.25);
+            border-radius:100px;
+            padding:4px 14px;
+            font-size:0.75rem;
+            font-weight:600;
+            letter-spacing:0.5px;
+          ">✓ Confirmed</span>
+        </div>
+      </div>
+
+      <!-- Order Items -->
+      <div style="padding:16px 20px;">
+        <div style="font-size:0.72rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">${items.length} item${items.length!==1?'s':''}</div>
+        ${items.map(item => {
+          const prod = PRODUCTS.find(p => p.id === item.id);
+          const img = prod ? prod.img : '';
+          const name = item.name || (prod ? prod.name : 'Product');
+          const price = typeof item.price === 'number' ? item.price : (prod ? prod.price : 0);
+          const cat = item.category || (prod ? prod.cat : '');
+          return `
+          <div style="
+            display:flex; align-items:center; gap:14px;
+            padding:10px 0;
+            border-bottom:1px solid var(--border);
+          ">
+            ${img ? `<div style="
+              width:52px; height:52px; flex-shrink:0;
+              border-radius:10px;
+              background:url('${img}') center/cover no-repeat var(--surface2);
+            "></div>` : `<div style="width:52px;height:52px;flex-shrink:0;background:var(--surface2);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:1.4rem;">📦</div>`}
+            <div style="flex:1;min-width:0;">
+              <div style="font-weight:600;font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${name}</div>
+              <div style="font-size:0.78rem;color:var(--muted);">${cat}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <div style="font-weight:600;color:var(--accent);">£${(price * item.qty).toFixed(2)}</div>
+              <div style="font-size:0.78rem;color:var(--muted);">×${item.qty} @ £${price.toFixed(2)}</div>
+            </div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }).join('');
 }
 
 // ─── INIT ────────────────────────────────────────────────────────────────────

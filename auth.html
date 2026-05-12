@@ -870,6 +870,14 @@ window.checkEmailLive = (inp) => {
 
 // ── Success state ────────────────────────────────────────
 function showSuccessState(user, isNew = false) {
+  // If user came from cart checkout flow, redirect back to checkout
+  const redirectTarget = sessionStorage.getItem('nova_redirect_after_login');
+  if (redirectTarget === 'checkout') {
+    sessionStorage.removeItem('nova_redirect_after_login');
+    setTimeout(() => { window.location.href = 'index.html?goto=checkout'; }, 300);
+    return;
+  }
+
   document.querySelectorAll('.auth-form').forEach(f => f.classList.remove('active'));
   document.getElementById('successPage').classList.add('show');
   const initials = (user.firstName[0] + user.lastName[0]).toUpperCase();
